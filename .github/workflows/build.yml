@@ -1,0 +1,690 @@
+name: Build Monitor APK
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Create project files
+        run: |
+          mkdir -p $(dirname settings.gradle.kts)
+          cat > settings.gradle.kts <<'EOF_0'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "GameMonitor"
+          include(":app")
+          EOF_0
+          mkdir -p $(dirname build.gradle.kts)
+          cat > build.gradle.kts <<'EOF_1'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_1
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'EOF_2'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF_2
+          mkdir -p $(dirname app/build.gradle.kts)
+          cat > app/build.gradle.kts <<'EOF_3'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.gameperf.monitor"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.gameperf.monitor"
+                  minSdk = 26
+                  targetSdk = 33
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("dev.rikka.shizuku:api:13.1.5")
+              implementation("dev.rikka.shizuku:provider:13.1.5")
+          }
+          EOF_3
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <application
+                  android:label="Game Monitor"
+                  android:icon="@mipmap/ic_launcher"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".OverlayService" android:exported="false" />
+                  <provider
+                      android:name="rikka.shizuku.ShizukuProvider"
+                      android:authorities="${applicationId}.shizuku"
+                      android:enabled="true"
+                      android:exported="true"
+                      android:multiprocess="false"
+                      android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+              </application>
+          </manifest>
+          EOF_4
+          mkdir -p $(dirname app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml)
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_bg" />
+              <foreground android:drawable="@drawable/ic_fg" />
+          </adaptive-icon>
+          EOF_5
+          mkdir -p $(dirname app/src/main/res/drawable/ic_bg.xml)
+          cat > app/src/main/res/drawable/ic_bg.xml <<'EOF_6'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#0D0F14" android:pathData="M0,0h108v108h-108z" />
+              <path android:fillColor="#1A1F2B" android:pathData="M0,72L108,44L108,108L0,108z" />
+          </vector>
+          EOF_6
+          mkdir -p $(dirname app/src/main/res/drawable/ic_fg.xml)
+          cat > app/src/main/res/drawable/ic_fg.xml <<'EOF_7'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:strokeColor="#00E676" android:strokeWidth="5"
+                  android:fillColor="#00000000"
+                  android:pathData="M54,22 A32,32 0 1,1 53.9,22" />
+              <path android:strokeColor="#00E5FF" android:strokeWidth="6"
+                  android:strokeLineCap="round" android:strokeLineJoin="round"
+                  android:fillColor="#00000000"
+                  android:pathData="M32,62 L44,48 L54,58 L66,38 L76,46" />
+              <path android:fillColor="#FF6D00"
+                  android:pathData="M30,72 h48 v4 h-48 z" />
+          </vector>
+          EOF_7
+          mkdir -p $(dirname app/src/main/java/com/gameperf/monitor/Exec.kt)
+          cat > app/src/main/java/com/gameperf/monitor/Exec.kt <<'EOF_8'
+          package com.gameperf.monitor
+
+          import rikka.shizuku.Shizuku
+
+          object Exec {
+              fun run(script: String): String {
+                  return try {
+                      val m = Shizuku::class.java.getDeclaredMethod(
+                          "newProcess",
+                          Array<String>::class.java, Array<String>::class.java, String::class.java)
+                      m.isAccessible = true
+                      val full = "exec 2>/dev/null\n" + script
+                      val p = m.invoke(null, arrayOf("sh", "-c", full), null, null) as Process
+                      val out = p.inputStream.bufferedReader().readText()
+                      p.waitFor()
+                      out
+                  } catch (e: Throwable) {
+                      ""
+                  }
+              }
+          }
+          EOF_8
+          mkdir -p $(dirname app/src/main/java/com/gameperf/monitor/OverlayService.kt)
+          cat > app/src/main/java/com/gameperf/monitor/OverlayService.kt <<'EOF_9'
+          package com.gameperf.monitor
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.graphics.drawable.Icon
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class OverlayService : Service() {
+
+              companion object {
+                  const val ACTION_STOP = "com.gameperf.monitor.STOP"
+                  const val CHANNEL = "monitor"
+              }
+
+              private class Sample(
+                  val fps: Int?, val minFps: Int,
+                  val cpu: Int?, val cpuMhz: Long?, val temp: Int?,
+                  val gpu: Int?, val gpuMhz: Long?
+              )
+
+              private lateinit var wm: WindowManager
+              private var root: LinearLayout? = null
+              private var tFps: TextView? = null
+              private var tCpu: TextView? = null
+              private var tGpu: TextView? = null
+              private val ui = Handler(Looper.getMainLooper())
+
+              @Volatile private var running = false
+              private var pkg = "com.tencent.ig"
+              private var layer: String? = null
+              private var zeroCount = 0
+              private var sinceSearch = 99
+              private var prevTotal = 0L
+              private var prevIdle = 0L
+              private var prevLatest = 0L
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (intent?.action == ACTION_STOP) {
+                      stopSelf()
+                      return START_NOT_STICKY
+                  }
+                  pkg = intent?.getStringExtra("pkg") ?: pkg
+                  startForeground(1, buildNotification())
+                  if (root == null) buildOverlay()
+                  if (!running) {
+                      running = true
+                      Thread { loop() }.start()
+                  }
+                  return START_NOT_STICKY
+              }
+
+              override fun onDestroy() {
+                  running = false
+                  try { root?.let { wm.removeView(it) } } catch (e: Throwable) { }
+                  root = null
+                  super.onDestroy()
+              }
+
+              private fun buildNotification(): Notification {
+                  val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                  nm.createNotificationChannel(
+                      NotificationChannel(CHANNEL, "Monitor", NotificationManager.IMPORTANCE_LOW))
+                  val stop = Intent(this, OverlayService::class.java).setAction(ACTION_STOP)
+                  val pi = PendingIntent.getService(this, 0, stop, PendingIntent.FLAG_IMMUTABLE)
+                  val action = Notification.Action.Builder(
+                      Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                      "Stop", pi).build()
+                  return Notification.Builder(this, CHANNEL)
+                      .setContentTitle("Game Monitor is running")
+                      .setContentText("Tap Stop to close the overlay")
+                      .setSmallIcon(android.R.drawable.ic_dialog_info)
+                      .addAction(action)
+                      .build()
+              }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+              private fun line(): TextView {
+                  val t = TextView(this)
+                  t.setTextColor(Color.WHITE)
+                  t.textSize = 12f
+                  t.typeface = Typeface.MONOSPACE
+                  return t
+              }
+
+              private fun buildOverlay() {
+                  wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  val box = LinearLayout(this)
+                  box.orientation = LinearLayout.VERTICAL
+                  box.setPadding(dp(8), dp(5), dp(8), dp(5))
+                  val bg = GradientDrawable()
+                  bg.setColor(Color.parseColor("#B3000000"))
+                  bg.cornerRadius = dp(8).toFloat()
+                  box.background = bg
+
+                  val f = line(); f.textSize = 14f; f.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                  val c = line()
+                  val g = line()
+                  f.text = "FPS --"
+                  c.text = "CPU --"
+                  g.text = "GPU --"
+                  box.addView(f); box.addView(c); box.addView(g)
+                  tFps = f; tCpu = c; tGpu = g
+
+                  val lp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                      PixelFormat.TRANSLUCENT)
+                  lp.gravity = Gravity.TOP or Gravity.START
+                  lp.x = dp(12)
+                  lp.y = dp(60)
+
+                  box.setOnTouchListener(object : View.OnTouchListener {
+                      var ix = 0
+                      var iy = 0
+                      var tx = 0f
+                      var ty = 0f
+                      override fun onTouch(v: View, e: MotionEvent): Boolean {
+                          when (e.action) {
+                              MotionEvent.ACTION_DOWN -> {
+                                  ix = lp.x; iy = lp.y; tx = e.rawX; ty = e.rawY
+                              }
+                              MotionEvent.ACTION_MOVE -> {
+                                  lp.x = ix + (e.rawX - tx).toInt()
+                                  lp.y = iy + (e.rawY - ty).toInt()
+                                  try { wm.updateViewLayout(box, lp) } catch (ex: Throwable) { }
+                              }
+                          }
+                          return true
+                      }
+                  })
+
+                  wm.addView(box, lp)
+                  root = box
+              }
+
+              private fun esc(s: String) = s.replace("'", "'\\''")
+
+              private fun parseFrames(out: String): List<Long> {
+                  val ts = ArrayList<Long>()
+                  var on = false
+                  for (raw in out.lines()) {
+                      val l = raw.trim()
+                      if (l.isEmpty()) continue
+                      if (l == "LAT") { on = true; continue }
+                      if (!on) continue
+                      val p = l.split(Regex("\\s+"))
+                      if (p.size >= 3) {
+                          val t = p[1].toLongOrNull()
+                          if (t != null && t > 0L && t != Long.MAX_VALUE) ts.add(t)
+                      }
+                  }
+                  return ts
+              }
+
+              private fun pickLayer(): String? {
+                  val list = Exec.run("dumpsys SurfaceFlinger --list")
+                  val cands = list.lines().map { it.trim() }.filter {
+                      it.contains(pkg) && !it.startsWith("Background for") && !it.startsWith("Bounds for")
+                  }.take(6)
+                  var best: String? = null
+                  var bestN = 0
+                  for (c in cands) {
+                      val out = Exec.run("echo LAT\ndumpsys SurfaceFlinger --latency '" + esc(c) + "'")
+                      val n = parseFrames(out).size
+                      if (n > bestN) { bestN = n; best = c }
+                  }
+                  return best
+              }
+
+              private fun collect(): Sample {
+                  if (layer == null) {
+                      sinceSearch++
+                      if (sinceSearch >= 3) {
+                          sinceSearch = 0
+                          layer = pickLayer()
+                      }
+                  }
+                  val lay = layer
+                  val sb = StringBuilder()
+                  sb.append("echo -n 'STAT '; head -n1 /proc/stat\n")
+                  sb.append("echo -n 'F7 '; cat /sys/devices/system/cpu/cpu7/cpufreq/scaling_cur_freq; echo\n")
+                  sb.append("echo -n 'GB '; cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage; echo\n")
+                  sb.append("echo -n 'GBZ '; cat /sys/class/kgsl/kgsl-3d0/gpubusy; echo\n")
+                  sb.append("echo -n 'GC '; cat /sys/class/kgsl/kgsl-3d0/gpuclk; echo\n")
+                  sb.append("echo -n 'GD '; cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq; echo\n")
+                  sb.append("echo THERM\n")
+                  sb.append("grep . /sys/class/thermal/thermal_zone*/type /sys/class/thermal/thermal_zone*/temp\n")
+                  if (lay != null) {
+                      sb.append("echo LAT\n")
+                      sb.append("dumpsys SurfaceFlinger --latency '" + esc(lay) + "'\n")
+                  }
+                  val out = Exec.run(sb.toString())
+
+                  var cpu: Int? = null
+                  var f7: Long? = null
+                  var gb: Int? = null
+                  var gbz: Pair<Long, Long>? = null
+                  var gc: Long? = null
+                  var gd: Long? = null
+                  val zType = HashMap<String, String>()
+                  val zTemp = HashMap<String, String>()
+                  val ts = ArrayList<Long>()
+                  var mode = ""
+                  for (raw in out.lines()) {
+                      val l = raw.trim()
+                      if (l.isEmpty()) continue
+                      when {
+                          l.startsWith("STAT ") -> {
+                              val p = l.substring(5).trim().split(Regex("\\s+"))
+                              val v = p.drop(1).take(8).map { it.toLongOrNull() ?: 0L }
+                              if (v.size >= 5) {
+                                  val total = v.sum()
+                                  val idle = v[3] + v[4]
+                                  if (prevTotal > 0L && total > prevTotal) {
+                                      val dt = total - prevTotal
+                                      val di = idle - prevIdle
+                                      cpu = (((dt - di) * 100) / dt).toInt().coerceIn(0, 100)
+                                  }
+                                  prevTotal = total
+                                  prevIdle = idle
+                              }
+                          }
+                          l.startsWith("F7 ") -> f7 = l.substring(3).trim().toLongOrNull()
+                          l.startsWith("GB ") -> gb = Regex("\\d+").find(l.substring(3))?.value?.toIntOrNull()
+                          l.startsWith("GBZ ") -> {
+                              val n = l.substring(4).trim().split(Regex("\\s+")).mapNotNull { it.toLongOrNull() }
+                              if (n.size >= 2) gbz = Pair(n[0], n[1])
+                          }
+                          l.startsWith("GC ") -> gc = l.substring(3).trim().toLongOrNull()
+                          l.startsWith("GD ") -> gd = l.substring(3).trim().toLongOrNull()
+                          l == "THERM" -> mode = "T"
+                          l == "LAT" -> mode = "L"
+                          mode == "T" -> {
+                              val idx = l.indexOf(':')
+                              if (idx > 0) {
+                                  val p = l.substring(0, idx)
+                                  val v = l.substring(idx + 1).trim()
+                                  if (p.endsWith("/type")) zType[p.removeSuffix("/type")] = v
+                                  else if (p.endsWith("/temp")) zTemp[p.removeSuffix("/temp")] = v
+                              }
+                          }
+                          mode == "L" -> {
+                              val p = l.split(Regex("\\s+"))
+                              if (p.size >= 3) {
+                                  val t = p[1].toLongOrNull()
+                                  if (t != null && t > 0L && t != Long.MAX_VALUE) ts.add(t)
+                              }
+                          }
+                      }
+                  }
+
+                  var gpu: Int? = gb
+                  val z = gbz
+                  if (gpu == null && z != null && z.second > 0L) {
+                      gpu = ((z.first * 100) / z.second).toInt().coerceIn(0, 100)
+                  }
+                  val gHz = gc ?: gd
+                  val gMhz = gHz?.let { if (it > 1000000L) it / 1000000L else it / 1000L }
+                  val cMhz = f7?.let { it / 1000L }
+
+                  var temp: Int? = null
+                  for ((k, t) in zType) {
+                      if (t.startsWith("cpu")) {
+                          val raw = zTemp[k]?.toLongOrNull()
+                          if (raw != null) {
+                              temp = if (raw > 1000L) (raw / 1000L).toInt() else raw.toInt()
+                              break
+                          }
+                      }
+                  }
+
+                  var fps: Int? = null
+                  var minFps = 0
+                  if (lay != null) {
+                      val latest = ts.maxOrNull()
+                      if (latest == null || latest == prevLatest) {
+                          fps = 0
+                      } else {
+                          val recent = ts.filter { it > latest - 1000000000L }.sorted()
+                          fps = recent.size
+                          var maxGap = 0L
+                          for (i in 1 until recent.size) {
+                              val g = recent[i] - recent[i - 1]
+                              if (g > maxGap) maxGap = g
+                          }
+                          if (maxGap > 0L) minFps = (1000000000L / maxGap).toInt()
+                      }
+                      prevLatest = latest ?: 0L
+                      if (fps == 0) {
+                          zeroCount++
+                          if (zeroCount >= 3) { layer = null; zeroCount = 0; sinceSearch = 99 }
+                      } else {
+                          zeroCount = 0
+                      }
+                  }
+                  return Sample(fps, minFps, cpu, cMhz, temp, gpu, gMhz)
+              }
+
+              private fun loop() {
+                  while (running) {
+                      val t0 = System.currentTimeMillis()
+                      val s = try { collect() } catch (e: Throwable) { null }
+                      if (s != null) ui.post { update(s) }
+                      val dt = System.currentTimeMillis() - t0
+                      try { Thread.sleep(maxOf(200L, 1000L - dt)) } catch (e: InterruptedException) { }
+                  }
+              }
+
+              private fun update(s: Sample) {
+                  val f = s.fps
+                  if (f == null || layer == null) {
+                      tFps?.text = "FPS --"
+                      tFps?.setTextColor(Color.LTGRAY)
+                  } else {
+                      tFps?.text = "FPS " + f + "  min " + s.minFps
+                      tFps?.setTextColor(
+                          when {
+                              f >= 55 -> Color.parseColor("#00E676")
+                              f >= 40 -> Color.parseColor("#FFC107")
+                              else -> Color.parseColor("#FF5252")
+                          })
+                  }
+                  val c = StringBuilder("CPU ")
+                  c.append(if (s.cpu != null) s.cpu.toString() + "%" else "--")
+                  if (s.cpuMhz != null) c.append("  " + s.cpuMhz + "MHz")
+                  if (s.temp != null) c.append("  " + s.temp + "C")
+                  tCpu?.text = c.toString()
+
+                  val g = StringBuilder("GPU ")
+                  g.append(if (s.gpu != null) s.gpu.toString() + "%" else "n/a")
+                  if (s.gpuMhz != null) g.append("  " + s.gpuMhz + "MHz")
+                  tGpu?.text = g.toString()
+              }
+          }
+          EOF_9
+          mkdir -p $(dirname app/src/main/java/com/gameperf/monitor/MainActivity.kt)
+          cat > app/src/main/java/com/gameperf/monitor/MainActivity.kt <<'EOF_10'
+          package com.gameperf.monitor
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.widget.Toast
+          import rikka.shizuku.Shizuku
+
+          class MainActivity : Activity() {
+
+              private lateinit var status: TextView
+              private lateinit var pkg: EditText
+
+              private val binderL = Shizuku.OnBinderReceivedListener { runOnUiThread { refresh() } }
+              private val deadL = Shizuku.OnBinderDeadListener { runOnUiThread { refresh() } }
+              private val permL = Shizuku.OnRequestPermissionResultListener { _, _ -> runOnUiThread { refresh() } }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+              private fun btn(text: String, color: String, action: () -> Unit): Button {
+                  val b = Button(this)
+                  b.text = text
+                  b.isAllCaps = false
+                  b.setTextColor(Color.WHITE)
+                  b.textSize = 15f
+                  val bg = GradientDrawable()
+                  bg.setColor(Color.parseColor(color))
+                  bg.cornerRadius = dp(14).toFloat()
+                  b.background = bg
+                  val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52))
+                  lp.topMargin = dp(8)
+                  b.layoutParams = lp
+                  b.setOnClickListener { action() }
+                  return b
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
+                  }
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Color.parseColor("#0D0F14"))
+                  root.setPadding(dp(16), dp(36), dp(16), dp(16))
+
+                  val title = TextView(this)
+                  title.text = "GAME MONITOR"
+                  title.setTextColor(Color.parseColor("#00E5FF"))
+                  title.textSize = 24f
+                  title.typeface = Typeface.DEFAULT_BOLD
+                  title.gravity = Gravity.CENTER
+                  root.addView(title)
+
+                  status = TextView(this)
+                  status.gravity = Gravity.CENTER
+                  status.textSize = 14f
+                  status.setPadding(0, dp(6), 0, dp(10))
+                  root.addView(status)
+
+                  pkg = EditText(this)
+                  pkg.setText("com.tencent.ig")
+                  pkg.setTextColor(Color.WHITE)
+                  pkg.hint = "Game package"
+                  pkg.setSingleLine()
+                  root.addView(pkg)
+
+                  root.addView(btn("▶  Start overlay", "#00897B") { start() })
+                  root.addView(btn("■  Stop overlay", "#C62828") {
+                      startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
+                  })
+                  root.addView(btn("🪟  Overlay permission", "#37474F") { requestOverlay() })
+                  root.addView(btn("🔑  Shizuku permission", "#37474F") { requestShizuku() })
+
+                  val info = TextView(this)
+                  info.setTextColor(Color.parseColor("#B0BEC5"))
+                  info.textSize = 12f
+                  info.setPadding(0, dp(14), 0, 0)
+                  info.text = "1) Start Shizuku\n2) Allow both permissions\n3) Start overlay, then open the game\n" +
+                      "Drag the overlay to move it. Stop it from here or from the notification."
+                  root.addView(info)
+
+                  setContentView(root)
+
+                  Shizuku.addBinderReceivedListenerSticky(binderL)
+                  Shizuku.addBinderDeadListener(deadL)
+                  Shizuku.addRequestPermissionResultListener(permL)
+                  refresh()
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  Shizuku.removeBinderReceivedListener(binderL)
+                  Shizuku.removeBinderDeadListener(deadL)
+                  Shizuku.removeRequestPermissionResultListener(permL)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refresh()
+              }
+
+              private fun alive() = try { Shizuku.pingBinder() } catch (e: Throwable) { false }
+
+              private fun ready() = try {
+                  Shizuku.pingBinder() &&
+                      Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+              } catch (e: Throwable) { false }
+
+              private fun refresh() {
+                  when {
+                      ready() -> {
+                          status.text = "● Connected (Shizuku)"
+                          status.setTextColor(Color.parseColor("#00E676"))
+                      }
+                      alive() -> {
+                          status.text = "● Shizuku running - permission needed"
+                          status.setTextColor(Color.parseColor("#FFC107"))
+                      }
+                      else -> {
+                          status.text = "● Shizuku not running"
+                          status.setTextColor(Color.parseColor("#FF5252"))
+                      }
+                  }
+              }
+
+              private fun requestShizuku() {
+                  if (!alive()) {
+                      Toast.makeText(this, "Start Shizuku first", Toast.LENGTH_LONG).show()
+                      return
+                  }
+                  try { Shizuku.requestPermission(100) } catch (e: Throwable) { }
+              }
+
+              private fun requestOverlay() {
+                  val i = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName))
+                  startActivity(i)
+              }
+
+              private fun start() {
+                  if (!ready()) {
+                      Toast.makeText(this, "Shizuku not ready", Toast.LENGTH_LONG).show()
+                      return
+                  }
+                  if (!Settings.canDrawOverlays(this)) {
+                      requestOverlay()
+                      return
+                  }
+                  val p = pkg.text.toString().trim().ifEmpty { "com.tencent.ig" }
+                  val i = Intent(this, OverlayService::class.java).putExtra("pkg", p)
+                  if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                  Toast.makeText(this, "Overlay started. Open the game.", Toast.LENGTH_LONG).show()
+              }
+          }
+          EOF_10
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GameMonitor-APK
+          path: app/build/outputs/apk/debug/*.apk
